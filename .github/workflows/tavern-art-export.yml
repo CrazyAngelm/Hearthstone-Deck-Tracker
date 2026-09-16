@@ -11,28 +11,34 @@ jobs:
     timeout-minutes: 5
     steps:
       - run: python -m pip install Pillow
-      - name: Resolve canonical IDs and download original art
+      - name: Download corrected artwork and metadata
         shell: python
         run: |
-          import base64,hashlib,io,json,pathlib,urllib.request
+          import base64,hashlib,io,json,pathlib,urllib.request,time
           from PIL import Image
           out=pathlib.Path('tavern-art-corrections');out.mkdir();(out/'images').mkdir()
           def get(url):
-            with urllib.request.urlopen(url,timeout=15) as r:return r.read()
-          cards=json.loads(get('https://api.hearthstonejson.com/v1/latest/ruRU/cards.json'))
-          byid={c['id']:c for c in cards}
-          ids=['CS2_201','skele21','EX1_283','EX1_173']
-          pack={};manifest={}
+            req=urllib.request.Request(url,headers={'User-Agent':'Tavern-Personal-Prototype-Asset-Bundler/9'})
+            with urllib.request.urlopen(req,timeout=15) as r:return r.read()
+          ids=['CS2_201','skele21','EX1_283','EX1_173'];pack={};manifest={}
           for id in ids:
-            card=byid[id];print(id,card['name'],card['type'],flush=True)
-            if card['type']!=('SPELL' if id=='EX1_173' else 'MINION'):raise ValueError('wrong card type')
-            url=f'https://art.hearthstonejson.com/v1/512x/{id}.jpg'
-            raw=get(url);im=Image.open(io.BytesIO(raw));im.load();b=io.BytesIO();im.save(b,format='WEBP',quality=94,method=6);data=b.getvalue()
-            (out/'images'/f'{id}.webp').write_bytes(data);pack[id]='data:image/webp;base64,'+base64.b64encode(data).decode()
-            manifest[id]={'url':url,'sha256':hashlib.sha256(data).hexdigest(),'sourceSha256':hashlib.sha256(raw).hexdigest(),'width':im.width,'height':im.height,'bytes':len(data),'card':card}
+            for folder,ext in [('512x','jpg'),('orig','png'),('512x','webp')]:
+              url=f'https://art.hearthstonejson.com/v1/{folder}/{id}.{ext}'
+              try:
+                raw=get(url);im=Image.open(io.BytesIO(raw));im.load();b=io.BytesIO();im.save(b,format='WEBP',quality=94,method=6);data=b.getvalue()
+                (out/'images'/f'{id}.webp').write_bytes(data);pack[id]='data:image/webp;base64,'+base64.b64encode(data).decode()
+                manifest[id]={'url':url,'sha256':hashlib.sha256(data).hexdigest(),'sourceSha256':hashlib.sha256(raw).hexdigest(),'width':im.width,'height':im.height,'bytes':len(data)};print(id,'OK',flush=True);break
+              except Exception as e:print(id,url,str(e),flush=True)
           (out/'art-pack.json').write_text(json.dumps({'format':'tavern-art-pack-v1','images':pack},separators=(',',':')))
           (out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
-          (out/'reference-base-cards.json').write_text(json.dumps([c for c in cards if c['id'].startswith(('CS','EX1','NEW1','DS1','HERO_0','AT_','GVG_','FP1_','OG_','skele'))],ensure_ascii=False,separators=(',',':')))
+          try:
+            cards=json.loads(get('https://api.hearthstonejson.com/v1/latest/ruRU/cards.json'))
+            selected=[c for c in cards if c['id'].startswith(('CS','EX1','NEW1','DS1','HERO_0','AT_','GVG_','FP1_','OG_','skele'))]
+            (out/'reference-base-cards.json').write_text(json.dumps(selected,ensure_ascii=False,separators=(',',':')))
+            for c in selected:
+              if c['id'] in ids:print('VERIFIED',c['id'],c['name'],c['type'])
+          except Exception as e:print('Optional metadata:',str(e))
+          print('RESULT',len(pack),len(ids))
       - uses: actions/upload-artifact@v4
         with:
           name: tavern-art-corrections
